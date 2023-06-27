@@ -6,14 +6,13 @@ import requests
 import re
 from pyspark.sql import SparkSession
 import os
+from pyspark.sql.functions import udf
+from pyspark.sql.types import StringType
 
-spark = SparkSession\
-        .builder\
-        .appName("Write_To_S3")\
-        .enableHiveSupport()\
-        .getOrCreate()
+spark = SparkSession.builder.appName("Write_To_S3").enableHiveSupport().getOrCreate()
+
 s3_write_location = "s3a://ankity-cdp-aw-delete/data/" 
-
+bucket_name = "ankity-cdp-aw-delete"
 # Set up scraper
 url = "https://finviz.com/news.ashx"
 req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -46,50 +45,84 @@ for item in news_items:
 # print(links)
 
 
-subset_links = links[0:10]
 
+for link in links:
+    try:
+        req = Request(link, headers={"User-Agent": "Mozilla/5.0"})
+        webpage = urlopen(req).read()
+        html = soup(webpage, "html.parser")
+        paragraphs = html.find_all('p')
 
-for link in subset_links:
-  req = Request(link, headers={"User-Agent": "Mozilla/5.0"})
-  webpage = urlopen(req).read()
-  html = soup(webpage, "html.parser")
-  paragraphs = html.find_all('p')
-
-  # Extract the text from each paragraph
-  paragraph_texts = [paragraph.get_text() for paragraph in paragraphs]
-  merged_article = ' '.join(paragraph_texts)
-  articles.append(merged_article)
+        # Extract the text from each paragraph
+        paragraph_texts = [paragraph.get_text() for paragraph in paragraphs]
+        merged_article = ' '.join(paragraph_texts)
+        articles.append(merged_article)
+    except (TypeError, AttributeError):
+        continue
+  
   
 
+  
+#TODO Create data directory in /app/mount and add data files there
+
   # Create a DataFrame from the titles and string_data lists
-data = list(zip(titles, articles))
-df = spark.createDataFrame(data, ["title", "data"])
+# data = list(zip(titles, articles))
+input_folder = "/app/mount/data/"
 
-for row in df.collect():
-    title = row["title"]
-    data = row["data"]
-    file_name = title.replace(" ", "_") + ".txt"
-    s3_path = s3_write_location + file_name
-    with open(file_name, "w") as file:
+# Create the folder
+os.makedirs(input_folder)
+# Set the input folder path
+#input_folder = "/app/mount/"
+
+# Remove all .txt files from the input folder
+txt_files = [file for file in os.listdir(input_folder) if file.endswith(".txt")]
+for file in txt_files:
+    file_path = os.path.join(input_folder, file)
+    os.remove(file_path)
+    print(f"File '{file}' removed successfully.")
+
+print("Running Code now")
+output_dir = "/app/mount/data/"
+
+
+for title, data in zip(titles, articles):
+    filename = title.replace(" ", "_").replace('/', '_') + ".txt"
+    filepath = os.path.join(output_dir, filename)
+    with open(filepath, "w") as file:
         file.write(data)
-    spark.sparkContext.parallelize([file_name]).coalesce(1).saveAsTextFile(s3_path)
+        print(f"File '{filename}' written successfully at '{filepath}'.")
 
-# # Function to write each file to S3
-# def write_to_s3(row):
-#     title = row["title"]
-#     data = row["data"]
-#     file_name = title + ".txt"
-#     s3_path = s3_write_location + file_name
-    
-#     # Write data to a local file
-#     with open(file_name, "w") as file:
-#         file.write(data)
-    
-#     # Write the local file to S3
-#     spark.read.text(file_name).write.text(s3_path)
-    
-#     # Clean up the local file
-#     os.remove(file_name)
+# List the contents of the directory
+contents = os.listdir(output_dir)
 
-# # Apply the write_to_s3 function to each row of the DataFrame
-# df.foreach(write_to_s3)
+# Print the contents
+for item in contents:
+    print(item)
+
+
+print(os.path.abspath(output_dir+"Three_Best_Practices_for_Making_Lasting_Life_Changes.txt"))
+
+df = spark.read.text(output_dir+"Three_Best_Practices_for_Making_Lasting_Life_Changes.txt")
+df.show()
+
+
+# # Read each text file from the input folder as a DataFrame
+# file_paths = spark.sparkContext.wholeTextFiles(input_folder).keys().collect()
+# data = spark.read.text(file_paths)
+
+# # Define the UDF function
+# extract_filename = udf(lambda path: path.split("/")[-1], StringType())
+
+# # Extract the filename using the UDF
+# data = data.withColumn("filename", extract_filename(data["value"]))
+# print(data)
+# data.show()
+
+# Generate the S3 output path for each file
+#output_paths = data.select(concat(lit("data"), "filename").alias("output_path"))
+
+# Write each file to S3
+# data = data.withColumn("file_content", data["value"])
+# data = data.select("filename", "file_content")
+
+# data.write.text("s3a://" + bucket_name + "/temp")

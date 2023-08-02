@@ -1,0 +1,7 @@
+requests
+bs4
+yfinance
+pandas==1.1.5
+numpy==1.19.5
+Boto3
+urllib3

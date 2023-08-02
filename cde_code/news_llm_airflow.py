@@ -28,9 +28,11 @@ class CMLJobRunOperator(BaseOperator):
         projects_url = 'api/v2/projects'
         r = get_hook.run(endpoint=projects_url)
         projects = {p['name'] : p['id'] for p in r.json()['projects']} if r.ok else None
+        print(projects)
         
         if projects and self.project in projects.keys():
             jobs_url = '{}/{}/jobs'.format(projects_url, projects[self.project])
+            print(jobs_url)
             r = get_hook.run(endpoint=jobs_url)
             jobs = {j['name'] : j['id'] for j in r.json()['jobs']} if r.ok else None
             
@@ -112,7 +114,7 @@ class CMLApplicationRestartOperator(BaseOperator):
 
 
 default_args = {
-    'owner': 'cdeuser',
+    'owner': 'ankity',
     'retry_delay': timedelta(seconds=5),
     'start_date': datetime(2021,1,1,1),
     'email_on_failure': False,
@@ -120,24 +122,37 @@ default_args = {
     'retries': 0
 }
 dag = DAG(
-    'run_cml_job_dag',
+    'FinNews_LLM_Pipeline',
     default_args=default_args,
     catchup=False,
-    is_paused_upon_creation=False
+    is_paused_upon_creation=False,
+    #schedule_interval = '0 */3 * * *'
 )
 start = DummyOperator(task_id='start', dag=dag)
 end = DummyOperator(task_id='end', dag=dag)
 
-cml_job = CMLJobRunOperator(
+get_data = CDEJobRunOperator(
+        task_id='Scrape_Data',
+        dag=dag,
+        job_name='finviz-job'
+)
+
+cml_clean_job = CMLJobRunOperator(
+    task_id='Clean_Data',
+    project='Original_MBO_Project',
+    job='clean_data_job', 
+    dag=dag)
+
+cml_vecdb_job = CMLJobRunOperator(
     task_id='Populate_Vector_DB',
-    project='LLM Chatbot Augmented with Enterprise Data - ankity',
+    project='Original_MBO_Project',
     job='Populate Vector DB with documents embeddings', 
     dag=dag)
 
 cml_restart_app = CMLApplicationRestartOperator(
     task_id='Restart_Application',
-    project='LLM Chatbot Augmented with Enterprise Data - ankity',
+    project='Original_MBO_Project',
     application_id='CML LLM Chatbot',
     dag=dag)
 
-start >> cml_job >> cml_restart_app >> end
+start >> get_data >> cml_clean_job >> cml_vecdb_job >> cml_restart_app >> end

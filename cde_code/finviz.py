@@ -3,16 +3,26 @@ import pandas as pd
 from bs4 import BeautifulSoup as soup
 from urllib.request import Request, urlopen
 import requests
+import urllib.error
 import re
 from pyspark.sql import SparkSession
 import os
 from pyspark.sql.functions import udf
 from pyspark.sql.types import StringType
+from pyspark.sql.functions import current_date, current_timestamp
+from datetime import date, datetime
 
 spark = SparkSession.builder.appName("Write_To_S3").enableHiveSupport().getOrCreate()
 
 s3_write_location = "s3a://ankity-cdp-aw-delete/data/" 
 bucket_name = "ankity-cdp-aw-delete"
+
+current_date_str = date.today()
+now = datetime.now()
+current_time = now.strftime("%H-%M-%S")
+folder_path = f"s3a://{bucket_name}/data/date={current_date_str}/timestamp={current_time}/"
+
+
 # Set up scraper
 url = "https://finviz.com/news.ashx"
 req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -31,6 +41,7 @@ for row in html.find_all("tr", class_="nn"):
 titles = []
 links = []
 articles = []
+
 for item in news_items:
     try:
         link_html = item['link']
@@ -41,8 +52,7 @@ for item in news_items:
         titles.append(title[0])
     except (TypeError, AttributeError):
         continue
-# print(titles)  
-# print(links)
+
 
 
 
@@ -57,72 +67,16 @@ for link in links:
         paragraph_texts = [paragraph.get_text() for paragraph in paragraphs]
         merged_article = ' '.join(paragraph_texts)
         articles.append(merged_article)
-    except (TypeError, AttributeError):
+    except (TypeError, AttributeError, urllib.error.HTTPError):
         continue
   
-  
+# Combine the lists into tuples
+data = list(zip(titles, links, articles))
 
-  
-#TODO Create data directory in /app/mount and add data files there
-
-  # Create a DataFrame from the titles and string_data lists
-# data = list(zip(titles, articles))
-input_folder = "/app/mount/data/"
-
-# Create the folder
-os.makedirs(input_folder)
-# Set the input folder path
-#input_folder = "/app/mount/"
-
-# Remove all .txt files from the input folder
-txt_files = [file for file in os.listdir(input_folder) if file.endswith(".txt")]
-for file in txt_files:
-    file_path = os.path.join(input_folder, file)
-    os.remove(file_path)
-    print(f"File '{file}' removed successfully.")
-
-print("Running Code now")
-output_dir = "/app/mount/data/"
+# Create a DataFrame with column names
+df = spark.createDataFrame(data, ["title", "link", "article_text"])
+df.coalesce(1).write.option("header", "true").parquet(f"{folder_path}")
 
 
-for title, data in zip(titles, articles):
-    filename = title.replace(" ", "_").replace('/', '_') + ".txt"
-    filepath = os.path.join(output_dir, filename)
-    with open(filepath, "w") as file:
-        file.write(data)
-        print(f"File '{filename}' written successfully at '{filepath}'.")
-
-# List the contents of the directory
-contents = os.listdir(output_dir)
-
-# Print the contents
-for item in contents:
-    print(item)
 
 
-print(os.path.abspath(output_dir+"Three_Best_Practices_for_Making_Lasting_Life_Changes.txt"))
-
-df = spark.read.text(output_dir+"Three_Best_Practices_for_Making_Lasting_Life_Changes.txt")
-df.show()
-
-
-# # Read each text file from the input folder as a DataFrame
-# file_paths = spark.sparkContext.wholeTextFiles(input_folder).keys().collect()
-# data = spark.read.text(file_paths)
-
-# # Define the UDF function
-# extract_filename = udf(lambda path: path.split("/")[-1], StringType())
-
-# # Extract the filename using the UDF
-# data = data.withColumn("filename", extract_filename(data["value"]))
-# print(data)
-# data.show()
-
-# Generate the S3 output path for each file
-#output_paths = data.select(concat(lit("data"), "filename").alias("output_path"))
-
-# Write each file to S3
-# data = data.withColumn("file_content", data["value"])
-# data = data.select("filename", "file_content")
-
-# data.write.text("s3a://" + bucket_name + "/temp")
